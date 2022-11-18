@@ -31,7 +31,7 @@ def lowerCamlCaseForUnderscoredText_wrapped(name):
         lastWasUpper = (char.upper() == char)
     result = ''.join(chars)
     if result.endswith('Id'):
-        result = result[:-2] + 'ID'
+        result = f'{result[:-2]}ID'
     return result
 
 # Provides conext for writing an indented block surrounded by braces.
@@ -149,7 +149,7 @@ class BaseContext(object):
 
     def derive_wrapped_swift_name(self):
         names = self.inherited_proto_names()
-        return self.args.proto_prefix + '_' + '.'.join(names)
+        return f'{self.args.proto_prefix}_' + '.'.join(names)
         
     def children(self):
         return []
@@ -162,10 +162,7 @@ class BaseContext(object):
         return result
         
     def siblings(self):
-        result = []
-        if self.parent is not None:
-            result = self.parent.children()
-        return result
+        return self.parent.children() if self.parent is not None else []
         
     def ancestors(self):
         result = []
@@ -185,15 +182,18 @@ class BaseContext(object):
             candidates.append(ancestor)
             candidates.extend(ancestor.siblings())
 
-        for candidate in candidates:
-            if candidate.proto_name == field.proto_type:
-                return candidate
-        
-        return None                
+        return next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.proto_name == field.proto_type
+            ),
+            None,
+        )                
         
     
     def base_swift_type_for_field(self, field):
-    
+
         if field.proto_type == 'string':
             return 'String'
         elif field.proto_type == 'uint64':
@@ -216,19 +216,23 @@ class BaseContext(object):
     
     def swift_type_for_field(self, field, suppress_optional=False):
         base_type = self.base_swift_type_for_field(field)
-        
-        if field.rules == 'optional':
-            if suppress_optional:
-                return base_type
-            can_be_optional = self.can_field_be_optional(field)
-            if can_be_optional:
-                return '%s?' % base_type
-            else:
-                return base_type
-        elif field.rules == 'required':
+
+        if (
+            field.rules == 'optional'
+            and suppress_optional
+            or field.rules != 'optional'
+            and field.rules == 'required'
+        ):
             return base_type
+        elif field.rules == 'optional':
+            return (
+                f'{base_type}?'
+                if (can_be_optional := self.can_field_be_optional(field))
+                else base_type
+            )
+
         elif field.rules == 'repeated':
-            return '[%s]' % base_type
+            return f'[{base_type}]'
         else:
             raise Exception('Unknown field type')
         
@@ -251,37 +255,30 @@ class BaseContext(object):
         # elif field.proto_type == 'bool':
         #     return False
         # elif self.is_field_an_enum(field):
-        if self.is_field_an_enum(field):
-            return False
-        else:
-            return True
+        return not self.is_field_an_enum(field)
         
     def is_field_an_enum(self, field):
         matching_context = self.context_for_proto_type(field)
-        if matching_context is not None:
-            if type(matching_context) is EnumContext:
-                return True
-        return False
+        return matching_context is not None and type(matching_context) is EnumContext
         
     def is_field_a_proto(self, field):
         matching_context = self.context_for_proto_type(field)
-        if matching_context is not None:
-            if type(matching_context) is MessageContext:
-                return True
-        return False
+        return (
+            matching_context is not None
+            and type(matching_context) is MessageContext
+        )
         
     def default_value_for_field(self, field):
         if field.rules == 'repeated':
             return '[]'
-        
+
         if field.default_value is not None and len(field.default_value) > 0:
             return field.default_value
 
         if field.rules == 'optional':
-            can_be_optional = self.can_field_be_optional(field)
-            if can_be_optional:
+            if can_be_optional := self.can_field_be_optional(field):
                 return 'nil'
-        
+
         if field.proto_type == 'uint64':
             return '0'
         elif field.proto_type == 'uint32':
@@ -294,7 +291,7 @@ class BaseContext(object):
             # TODO: Assert that rules is empty.
             enum_context = self.context_for_proto_type(field)
             return enum_context.default_value()
-            
+
         return None        
         
 
@@ -326,15 +323,15 @@ import Foundation
 // WARNING: This code is generated. Only edit within the markers.
 '''.strip())
         writer.newline()        
-        
-        writer.invalid_protobuf_error_name = '%sError' % self.args.wrapper_prefix
+
+        writer.invalid_protobuf_error_name = f'{self.args.wrapper_prefix}Error'
         writer.extend(('''
 public enum %s: Error {
     case invalidProtobuf(description: String)
 }
 ''' % writer.invalid_protobuf_error_name).strip())
         writer.newline()        
-        
+
         for child in self.children():
             child.generate(writer)
 
@@ -350,7 +347,7 @@ class MessageField:
         self.is_required = is_required
             
     def has_accessor_name(self):
-        name = 'has' + self.name_swift[0].upper() + self.name_swift[1:]
+        name = f'has{self.name_swift[0].upper()}{self.name_swift[1:]}'
         if name == 'hasId':
             # TODO: I'm not sure why "Apple Swift Proto" code formats the
             # the name in this way.
@@ -391,8 +388,8 @@ class MessageContext(BaseContext):
         
     def prepare(self):
         self.swift_name = self.derive_swift_name()
-        self.swift_builder_name = "%sBuilder" % self.swift_name
-        
+        self.swift_builder_name = f"{self.swift_name}Builder"
+
         for child in self.children():
             child.prepare()
         
